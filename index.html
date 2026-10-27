@@ -1,0 +1,349 @@
+
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Mini Football</title>
+<style>
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: Arial, sans-serif;
+  background: #163d26;
+  color: white;
+}
+#menu {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #101b2b;
+  z-index: 2;
+}
+h1 { font-size: 42px; }
+button {
+  padding: 14px 24px;
+  margin: 8px;
+  border: 0;
+  border-radius: 10px;
+  font-weight: bold;
+  font-size: 17px;
+  cursor: pointer;
+}
+#info {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  background: #101b2bdd;
+  padding: 12px;
+  border-radius: 8px;
+  line-height: 1.7;
+}
+</style>
+</head>
+<body>
+<div id="menu">
+  <h1>3D MINI FOOTBALL</h1>
+  <p>Válassz csapatot!</p>
+  <button onclick="start('barca')">FC Barcelona</button>
+  <button onclick="start('real')">Real Madrid</button>
+</div>
+
+<div id="info" hidden>
+  <div id="score">0 - 0</div>
+  WASD vagy nyilak: mozgás<br>
+  Jobb egérklikk: rúgás<br>
+  F: magas rúgás<br>
+  R: passz<br>
+  Space + bal klikk: kapusvetődés
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script>
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87b9d6);
+
+const camera = new THREE.PerspectiveCamera(
+  60, innerWidth / innerHeight, 0.1, 500
+);
+camera.position.set(0, 48, 65);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x34502b, 2));
+
+const light = new THREE.DirectionalLight(0xffffff, 2);
+light.position.set(-20, 40, 20);
+light.castShadow = true;
+scene.add(light);
+
+function material(color) {
+  return new THREE.MeshStandardMaterial({color});
+}
+
+const grass = new THREE.Mesh(
+  new THREE.PlaneGeometry(100, 64),
+  material(0x218443)
+);
+grass.rotation.x = -Math.PI / 2;
+grass.receiveShadow = true;
+scene.add(grass);
+
+function line(x1,z1,x2,z2) {
+  const length = Math.hypot(x2-x1,z2-z1);
+  const obj = new THREE.Mesh(
+    new THREE.BoxGeometry(length,0.08,0.12),
+    material(0xffffff)
+  );
+  obj.position.set((x1+x2)/2,0.06,(z1+z2)/2);
+  obj.rotation.y = -Math.atan2(z2-z1,x2-x1);
+  scene.add(obj);
+}
+
+line(-50,-32,50,-32);
+line(-50,32,50,32);
+line(-50,-32,-50,32);
+line(50,-32,50,32);
+line(0,-32,0,32);
+
+const centerCircle = new THREE.Mesh(
+  new THREE.TorusGeometry(8,0.08,8,64),
+  material(0xffffff)
+);
+centerCircle.rotation.x = Math.PI/2;
+centerCircle.position.y = 0.08;
+scene.add(centerCircle);
+
+function makeGoal(x) {
+  const white = material(0xffffff);
+  for(const z of [-3,3]) {
+    const post = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15,0.15,2.5,12),
+      white
+    );
+    post.position.set(x,1.25,z);
+    scene.add(post);
+  }
+  const bar = new THREE.Mesh(
+    new THREE.BoxGeometry(0.2,0.2,6),
+    white
+  );
+  bar.position.set(x,2.5,0);
+  scene.add(bar);
+}
+makeGoal(-50);
+makeGoal(50);
+
+const players = [];
+let user, ball, velocity;
+let keys = {};
+let active = false;
+let scoreA = 0, scoreB = 0;
+
+function makePlayer(x,z,shirt,shorts) {
+  const person = new THREE.Group();
+
+  const skin = material(0xe4b28a);
+  const shirtMat = material(shirt);
+  const shortsMat = material(shorts);
+  const bootsMat = material(0x111111);
+
+  const torso = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.48,0.62,1.15,12),
+    shirtMat
+  );
+  torso.position.y = 1.45;
+  torso.castShadow = true;
+  person.add(torso);
+
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.34,16,12),
+    skin
+  );
+  head.position.y = 2.25;
+  person.add(head);
+
+  const hair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.35,16,8,0,Math.PI*2,0,Math.PI/2),
+    material(0x34231b)
+  );
+  hair.position.y = 2.35;
+  person.add(hair);
+
+  const shortsMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(0.85,0.42,0.5),
+    shortsMat
+  );
+  shortsMesh.position.y = 0.75;
+  person.add(shortsMesh);
+
+  for(const side of [-1,1]) {
+    const leg = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.14,0.12,0.7,10),
+      skin
+    );
+    leg.position.set(side*0.23,0.25,0);
+    person.add(leg);
+
+    const boot = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24,0.14,0.38),
+      bootsMat
+    );
+    boot.position.set(side*0.23,0.06,-0.1);
+    person.add(boot);
+
+    const arm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12,0.14,0.8,10),
+      skin
+    );
+    arm.position.set(side*0.63,1.42,0);
+    arm.rotation.z = side*0.18;
+    person.add(arm);
+  }
+
+  person.position.set(x,0,z);
+  scene.add(person);
+  players.push(person);
+  return person;
+}
+
+function start(team) {
+  document.getElementById('menu').style.display = 'none';
+  document.getElementById('info').hidden = false;
+
+  const barca = team === 'barca';
+  user = makePlayer(-20,0,barca ? 0x123d9b : 0xf2f2f2,
+                    barca ? 0xa90d3c : 0x174da0);
+
+  for(let i=0;i<5;i++) {
+    makePlayer(-35+i*7, i%2===0 ? -12 : 12,
+      barca ? 0x123d9b : 0xf2f2f2,
+      barca ? 0xa90d3c : 0x174da0);
+  }
+
+  for(let i=0;i<6;i++) {
+    makePlayer(10+i*6, i%2===0 ? -12 : 12,
+      barca ? 0xf2f2f2 : 0x123d9b,
+      barca ? 0x174da0 : 0xa90d3c);
+  }
+
+  ball = new THREE.Mesh(
+    new THREE.SphereGeometry(0.48,20,16),
+    material(0xffffff)
+  );
+  ball.position.set(-18,0.5,0);
+  ball.castShadow = true;
+  scene.add(ball);
+
+  velocity = new THREE.Vector3();
+  active = true;
+}
+
+window.addEventListener('keydown',e => {
+  keys[e.key.toLowerCase()] = true;
+
+  if(!active) return;
+
+  if(e.key.toLowerCase()==='f') {
+    velocity.y = 8;
+    velocity.x = 15;
+  }
+
+  if(e.key.toLowerCase()==='r') {
+    velocity.x = 18;
+  }
+});
+
+window.addEventListener('keyup',e => {
+  keys[e.key.toLowerCase()] = false;
+});
+
+renderer.domElement.addEventListener('contextmenu',e => {
+  e.preventDefault();
+});
+
+renderer.domElement.addEventListener('mousedown',e => {
+  if(!active || !ball) return;
+
+  if(e.button===2) {
+    velocity.x = 25;
+    velocity.y = 3;
+  }
+
+  if(e.button===0 && keys[' ']) {
+    user.position.z += ball.position.z > user.position.z ? 2 : -2;
+  }
+});
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(),0.04);
+
+  if(active && user) {
+    const speed = 12 * dt;
+
+    if(keys.w || keys.arrowup) user.position.z -= speed;
+    if(keys.s || keys.arrowdown) user.position.z += speed;
+    if(keys.a || keys.arrowleft) user.position.x -= speed;
+    if(keys.d || keys.arrowright) user.position.x += speed;
+
+    user.position.x = THREE.MathUtils.clamp(user.position.x,-48,48);
+    user.position.z = THREE.MathUtils.clamp(user.position.z,-30,30);
+
+    if(ball.position.distanceTo(user.position)<2.2 &&
+       velocity.length()<3) {
+      ball.position.x = user.position.x+1;
+      ball.position.z = user.position.z;
+    }
+
+    ball.position.x += velocity.x*dt;
+    ball.position.z += velocity.z*dt;
+    ball.position.y += velocity.y*dt;
+    velocity.y -= 20*dt;
+    velocity.multiplyScalar(0.99);
+
+    if(ball.position.y<0.48) {
+      ball.position.y = 0.48;
+      velocity.y = Math.max(0,velocity.y)*-0.3;
+    }
+
+    if(Math.abs(ball.position.z)>32) velocity.z *= -0.7;
+
+    if(ball.position.x>50 || ball.position.x<-50) {
+      if(Math.abs(ball.position.z)<3.1) {
+        if(ball.position.x>0) scoreA++;
+        else scoreB++;
+        document.getElementById('score').textContent =
+          scoreA+' - '+scoreB;
+      }
+      ball.position.set(-18,0.5,0);
+      velocity.set(0,0,0);
+    }
+
+    camera.position.x += (user.position.x-camera.position.x)*dt*0.5;
+    camera.position.z += (user.position.z+65-camera.position.z)*dt*0.5;
+    camera.lookAt(user.position.x,0,user.position.z);
+  }
+
+  renderer.render(scene,camera);
+}
+
+window.addEventListener('resize',() => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>
